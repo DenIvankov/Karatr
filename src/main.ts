@@ -1,10 +1,15 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import { join } from 'path';
+import * as express from 'express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.enableCors();
+  app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -32,7 +37,7 @@ async function bootstrap() {
 
   while (true) {
     try {
-      await app.listen(port);
+      await app.listen(port, '0.0.0.0');
       break;
     } catch (error: unknown) {
       if (

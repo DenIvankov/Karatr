@@ -17,5 +17,26 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  app:
+    build: .
+    container_name: nest_app
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=nestuser
+      - DATABASE_PASSWORD=nestpass
+      - DATABASE_NAME=nestdb
+      - JWT_SECRET=your_jwt_secret
+      - JWT_ACCESS_EXPIRES=15m
+      - JWT_REFRESH_SECRET=your_refresh_secret
+      - JWT_REFRESH_EXPIRES=7d
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      - postgres
+
 volumes:
   postgres_data:

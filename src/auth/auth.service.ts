@@ -10,6 +10,7 @@ import { RegisterUserDto } from './dto/register-user.dto';
 type JwtPayload = {
   sub: number;
   email: string;
+  name: string;
 };
 
 @Injectable()
@@ -23,6 +24,7 @@ export class AuthService {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
+      name: user.name,
     };
 
     const access_token = await this.jwtService.signAsync(payload, {
@@ -72,7 +74,9 @@ export class AuthService {
     const credential = await this.usersService.findCredentialByUserId(user.id);
 
     if (!credential) {
-      throw new BadRequestException('У пользователя отсутствуют учетные данные');
+      throw new BadRequestException(
+        'У пользователя отсутствуют учетные данные',
+      );
     }
 
     const isPasswordCorrect = await bcrypt.compare(

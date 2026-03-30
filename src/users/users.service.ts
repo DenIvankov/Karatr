@@ -12,11 +12,11 @@ import { RefreshToken } from './entities/refresh-token.entity';
 import { UserCredential } from './entities/user-credential.entity';
 import { UserProfile } from './entities/user-profile.entity';
 import { User } from './entities/user.entity';
-import { Post } from './entities/post.entity';
-import { CreatePostDto } from './dto/create-post.dto';
-import { CreateCommentDto } from './dto/create-comment.dto';
-import { Comment } from './entities/comment.entity';
-import { PostLike } from './entities/postLike.entity';
+import { CreateProfileDto } from './dto/create-profile.dto';
+import { DeleteProfileImagesDto } from './dto/delete-profile-images.dto';
+import { unlinkSync, existsSync } from 'fs';
+import { join } from 'path';
+import { Express } from 'express';
 
 @Injectable()
 export class UsersService {
@@ -29,12 +29,6 @@ export class UsersService {
     private readonly profileRepository: Repository<UserProfile>,
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>,
-    @InjectRepository(Post)
-    private readonly postRepository: Repository<Post>,
-    @InjectRepository(Comment)
-    private readonly commentRepository: Repository<Comment>,
-    @InjectRepository(PostLike)
-    private readonly postLikesRepository: Repository<PostLike>,
   ) {}
 
   async create(newUser: CreateUserDto): Promise<User> {
@@ -110,70 +104,6 @@ export class UsersService {
       where: { user: { id: userId } },
       relations: { user: true },
       order: { id: 'DESC' },
-    });
-  }
-  async createPost(userId: number, postData: CreatePostDto) {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException(`User with id ${userId} not found`);
-    }
-
-    const post = this.postRepository.create({
-      ...postData,
-      user,
-    });
-
-    return this.postRepository.save(post);
-  }
-  async createComment(commentData: CreateCommentDto, postId: number) {
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-    });
-
-    if (!post) {
-      throw new NotFoundException(`Post with id ${postId} not found`);
-    }
-
-    const comment = this.commentRepository.create({
-      ...commentData,
-      post,
-    });
-
-    return this.commentRepository.save(comment);
-  }
-  async addLike(userId: number, postId: number) {
-    const post = await this.postRepository.findOne({
-      where: { id: postId },
-    });
-
-    if (!post) {
-      throw new NotFoundException(`Пост с номером id ${postId} не существует`);
-    }
-
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException(
-        `Пользователь с номером id ${userId} не существует`,
-      );
-    }
-
-    const existingLike = await this.postLikesRepository.findOne({
-      where: { post: { id: postId }, user: { id: userId } },
-    });
-
-    if (existingLike) {
-      return this.postLikesRepository.delete(existingLike.id);
-    }
-
-    return this.postLikesRepository.save({
-      post,
-      user,
     });
   }
 
@@ -287,4 +217,165 @@ export class UsersService {
       throw new ConflictException(`User with email ${email} already exists`);
     }
   }
+
+  private removeOldFile(oldPath: string | null) {
+    if (!oldPath) return;
+
+    // Убираем ведущий слэш, если есть
+    const relativePath = oldPath.startsWith('/')
+      ? oldPath.substring(1)
+      : oldPath;
+    const fullPath = join(process.cwd(), relativePath);
+
+    console.log(`Attempting to delete: ${fullPath}`);
+
+    if (existsSync(fullPath)) {
+      try {
+        unlinkSync(fullPath);
+        console.log(`Successfully deleted: ${fullPath}`);
+      } catch (error) {
+        console.error(`Failed to delete old file ${fullPath}:`, error);
+      }
+    } else {
+      console.log(`File not found: ${fullPath}`);
+    }
+  }
+
+  async createProfile(
+    userId: number,
+    createProfileDto: CreateProfileDto,
+    files?: {
+      avatar?: Express.Multer.File[];
+      background?: Express.Multer.File[];
+    },
+  ) {
+    const user = await this.findOneById(userId);
+
+    const existingProfile = await this.profileRepository.findOne({
+      where: { user: { id: userId } },
+    });
+
+    if (existingProfile) {
+      // Удаляем старый аватар, если загружен новый
+      if (files?.avatar?.length && existingProfile.avatar) {
+        this.removeOldFile(existingProfile.avatar);
+      }
+      // Удаляем старый фон, если загружен новый
+      if (files?.background?.length && existingProfile.background) {
+        this.removeOldFile(existingProfile.background);
+      }
+
+      await this.profileRepository.update(existingProfile.id, createProfileDto);
+      const updatedProfile = await this.profileRepository.findOne({
+        where: { id: existingProfile.id },
+      });
+      return {
+        profile: updatedProfile,
+        message: 'Профиль успешно обновлен',
+      };
+    }
+
+    const profile = this.profileRepository.create({
+      ...createProfileDto,
+      user,
+    });
+
+    const savedProfile = await this.profileRepository.save(profile);
+
+    return {
+      profile: savedProfile,
+      message: 'Профиль успешно создан',
+    };
+  }
+
+  async updateProfile(
+    userId: number,
+    updateProfileDto: CreateProfileDto,
+    files?: {
+      avatar?: Express.Multer.File[];
+      background?: Express.Multer.File[];
+    },
+  ) {
+    const profile = await this.profileRepository.findOne({
+      where: { user: { id: userId } },
+    });
+
+    if (!profile) {
+      throw new NotFoundException(
+        `Профиль для пользователя с id ${userId} не найден`,
+      );
+    }
+
+    // Удаляем старый аватар, если загружен новый
+    if (files?.avatar?.length && profile.avatar) {
+      this.removeOldFile(profile.avatar);
+    }
+    // Удаляем старый фон, если загружен новый
+    if (files?.background?.length && profile.background) {
+      this.removeOldFile(profile.background);
+    }
+
+    await this.profileRepository.update(profile.id, updateProfileDto);
+    const updatedProfile = await this.profileRepository.findOne({
+      where: { id: profile.id },
+    });
+
+    return {
+      profile: updatedProfile,
+      message: 'Профиль успешно обновлен',
+    };
+  }
+
+  async getProfileByUserId(userId: number) {
+    const profile = await this.profileRepository.findOne({
+      where: { user: { id: userId } },
+      relations: { user: true },
+    });
+
+    if (!profile) {
+      throw new NotFoundException(
+        `Профиль для пользователя с id ${userId} не найден`,
+      );
+    }
+
+    return { profile };
+  }
+
+  async deleteProfileImages(userId: number, deleteDto: DeleteProfileImagesDto) {
+    const profile = await this.profileRepository.findOne({
+      where: { user: { id: userId } },
+    });
+
+    if (!profile) {
+      throw new NotFoundException(
+        `Профиль для пользователя с id ${userId} не найден`,
+      );
+    }
+
+    let deletedCount = 0;
+
+    if (deleteDto.deleteAvatar && profile.avatar) {
+      this.removeOldFile(profile.avatar);
+      profile.avatar = null;
+      deletedCount++;
+    }
+
+    if (deleteDto.deleteBackground && profile.background) {
+      this.removeOldFile(profile.background);
+      profile.background = null;
+      deletedCount++;
+    }
+
+    if (deletedCount > 0) {
+      await this.profileRepository.save(profile);
+    }
+
+    return {
+      message: `Удалено изображений: ${deletedCount}`,
+      deletedAvatar: deleteDto.deleteAvatar && profile.avatar === null,
+      deletedBackground:
+        deleteDto.deleteBackground && profile.background === null,
+    };
+  }
 }
+
