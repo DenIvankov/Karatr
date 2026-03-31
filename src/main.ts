@@ -3,13 +3,13 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
-import { join } from 'path';
 import * as express from 'express';
+import { UPLOADS_DIR } from './common/uploads-path';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.enableCors();
-  app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
+  app.use('/uploads', express.static(UPLOADS_DIR));
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -32,27 +32,8 @@ async function bootstrap() {
     },
   });
 
-  const basePort = Number(process.env.PORT ?? 3000);
-  let port = basePort;
-
-  while (true) {
-    try {
-      await app.listen(port, '0.0.0.0');
-      break;
-    } catch (error: unknown) {
-      if (
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        error.code === 'EADDRINUSE'
-      ) {
-        port += 1;
-        continue;
-      }
-
-      throw error;
-    }
-  }
+  const port = Number(process.env.PORT ?? 3000);
+  await app.listen(port, '0.0.0.0');
 
   console.log(`Application is running on: http://localhost:${port}`);
 }

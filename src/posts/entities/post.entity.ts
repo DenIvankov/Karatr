@@ -12,6 +12,7 @@ import { User } from 'src/users/entities/user.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
 import { PostLike } from './post-like.entity';
 import { PostMedia } from './post-media.entity';
+import { PostFavorite } from './post-favorite.entity';
 
 @Entity('posts')
 export class Post {
@@ -35,12 +36,23 @@ export class Post {
   @ApiProperty({ example: 12, description: 'Likes count' })
   likesCount: number;
 
+  @Column({ name: 'views_count', type: 'int', default: 0 })
+  @ApiProperty({ example: 145, description: 'Views count' })
+  viewsCount: number;
+
   @ApiProperty({
     example: true,
     description: 'Whether current authorized user liked this post',
     required: false,
   })
   currentUserLiked?: boolean;
+
+  @ApiProperty({
+    example: true,
+    description: 'Whether current authorized user favorited this post',
+    required: false,
+  })
+  currentUserFavorited?: boolean;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   @ApiProperty({ example: '2024-01-01T00:00:00Z', description: 'Created at' })
@@ -58,6 +70,10 @@ export class Post {
   @OneToMany(() => PostLike, (likes) => likes.post)
   @ApiProperty({ type: () => [PostLike], required: false })
   likes: PostLike[];
+
+  @OneToMany(() => PostFavorite, (favorites) => favorites.post)
+  @ApiProperty({ type: () => [PostFavorite], required: false })
+  favorites: PostFavorite[];
 
   @OneToMany(() => PostMedia, (media) => media.post)
   @ApiProperty({ type: () => [PostMedia], required: false })

@@ -1,123 +1,137 @@
 import {
-  Controller,
-  Get,
-  Post,
   Body,
-  Patch,
-  Param,
+  Controller,
   Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  UseGuards,
 } from '@nestjs/common';
 import { FollowerService } from './follower.service';
 import { CreateFollowerDto } from './dto/create-follower.dto';
-import { UpdateFollowerDto } from './dto/update-follower.dto';
-import { ApiOperation, ApiResponse } from '@nestjs/swagger';
-import {
-  FollowerResponseDto,
-  FollowersListDto,
-} from './dto/follower-response.dto';
-import { SuccessMessageDto } from 'src/common/dto/success-message.dto';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { FollowersListDto } from './dto/follower-response.dto';
+import { JwtGuard } from 'src/auth/jwt.guard';
+import { User } from 'src/common/user.decorator';
 
+@ApiTags('Follower')
 @Controller('follower')
 export class FollowerController {
   constructor(private readonly followerService: FollowerService) {}
 
-  @Post()
-  @ApiOperation({ summary: 'Подписаться' })
+  @Post(':id/follow')
+  @ApiOperation({ summary: 'Follow user' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
+  @ApiParam({ name: 'id', example: 2, description: 'Target user ID' })
   @ApiResponse({
     status: 201,
-    description: 'Successfully followed',
-    type: FollowerResponseDto,
+    description: 'Followed successfully',
+    schema: {
+      example: {
+        following: true,
+        followerId: 1,
+        followingId: 2,
+      },
+    },
   })
-  @ApiResponse({ status: 400, description: 'Bad request' })
-  @ApiResponse({ status: 409, description: 'Already following' })
+  follow(
+    @User('userId') userId: number,
+    @Param('id', ParseIntPipe) targetUserId: number,
+  ) {
+    return this.followerService.follow(userId, targetUserId);
+  }
+
+  @Delete(':id/follow')
+  @ApiOperation({ summary: 'Unfollow user' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
+  @ApiParam({ name: 'id', example: 2, description: 'Target user ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Unfollowed successfully',
+    schema: {
+      example: {
+        following: false,
+        followerId: 1,
+        followingId: 2,
+      },
+    },
+  })
+  unfollow(
+    @User('userId') userId: number,
+    @Param('id', ParseIntPipe) targetUserId: number,
+  ) {
+    return this.followerService.unfollow(userId, targetUserId);
+  }
+
+  @Get(':id/is-following')
+  @ApiOperation({ summary: 'Check if current user follows target user' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
+  @ApiParam({ name: 'id', example: 2, description: 'Target user ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Following status',
+    schema: {
+      example: {
+        isFollowing: true,
+        followerId: 1,
+        followingId: 2,
+      },
+    },
+  })
+  isFollowing(
+    @User('userId') userId: number,
+    @Param('id', ParseIntPipe) targetUserId: number,
+  ) {
+    return this.followerService.isFollowing(userId, targetUserId);
+  }
+
+  // Legacy body-based endpoint compatibility
+  @Post()
+  @ApiOperation({ summary: 'Follow user (legacy body-based)' })
   create(@Body() createFollowerDto: CreateFollowerDto) {
-    return this.followerService.follow(createFollowerDto);
+    return this.followerService.followFromDto(createFollowerDto);
   }
 
+  // Legacy body-based endpoint compatibility
   @Post('unfollow')
-  @ApiOperation({ summary: 'Отписаться' })
-  @ApiResponse({
-    status: 200,
-    description: 'Successfully unfollowed',
-    type: SuccessMessageDto,
-  })
-  @ApiResponse({ status: 404, description: 'Follow relationship not found' })
-  unfollow(@Body() createFollowerDto: CreateFollowerDto) {
-    return this.followerService.unfollow(createFollowerDto);
+  @ApiOperation({ summary: 'Unfollow user (legacy body-based)' })
+  unfollowLegacy(@Body() createFollowerDto: CreateFollowerDto) {
+    return this.followerService.unfollowFromDto(createFollowerDto);
   }
 
-  @Get()
-  @ApiOperation({ summary: 'Получить все подписки' })
+  @Get(':id/followers')
+  @ApiOperation({ summary: 'Get followers by user id' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
   @ApiResponse({
     status: 200,
     description: 'Followers retrieved successfully',
     type: FollowersListDto,
   })
-  findAll() {
-    return this.followerService.findAll();
+  getFollowers(
+    @Param('id', ParseIntPipe) id: number,
+    @User('userId') currentUserId: number,
+  ) {
+    return this.followerService.getFollowers(id, currentUserId);
   }
 
-  @Get('followers/:id')
-  @ApiOperation({ summary: 'Получить подписчиков' })
-  @ApiResponse({
-    status: 200,
-    description: 'Followers retrieved successfully',
-    type: FollowersListDto,
-  })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  getFollowers(@Param('id') id: string) {
-    return this.followerService.getFollowers(+id);
-  }
-
-  @Get('following/:id')
-  @ApiOperation({ summary: 'Получить подписанных' })
+  @Get(':id/following')
+  @ApiOperation({ summary: 'Get following by user id' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
   @ApiResponse({
     status: 200,
     description: 'Following retrieved successfully',
     type: FollowersListDto,
   })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  getFollowing(@Param('id') id: string) {
-    return this.followerService.getFollowing(+id);
-  }
-
-  @Get(':id')
-  @ApiOperation({ summary: 'Получить подписку по ID' })
-  @ApiResponse({
-    status: 200,
-    description: 'Follower retrieved successfully',
-    type: FollowerResponseDto,
-  })
-  @ApiResponse({ status: 404, description: 'Follower not found' })
-  findOne(@Param('id') id: string) {
-    return this.followerService.findOne(+id);
-  }
-
-  @Patch(':id')
-  @ApiOperation({ summary: 'Обновить подписку' })
-  @ApiResponse({
-    status: 200,
-    description: 'Follower updated successfully',
-    type: FollowerResponseDto,
-  })
-  @ApiResponse({ status: 400, description: 'Bad request' })
-  @ApiResponse({ status: 404, description: 'Follower not found' })
-  update(
-    @Param('id') id: string,
-    @Body() updateFollowerDto: UpdateFollowerDto,
+  getFollowing(
+    @Param('id', ParseIntPipe) id: number,
+    @User('userId') currentUserId: number,
   ) {
-    return this.followerService.update(+id, updateFollowerDto);
-  }
-
-  @Delete(':id')
-  @ApiOperation({ summary: 'Удалить подписку' })
-  @ApiResponse({
-    status: 200,
-    description: 'Follower deleted successfully',
-    type: SuccessMessageDto,
-  })
-  @ApiResponse({ status: 404, description: 'Follower not found' })
-  remove(@Param('id') id: string) {
-    return this.followerService.remove(+id);
+    return this.followerService.getFollowing(id, currentUserId);
   }
 }

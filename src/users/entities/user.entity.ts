@@ -13,6 +13,7 @@ import { UserCredential } from './user-credential.entity';
 import { UserProfile } from './user-profile.entity';
 import { Post } from 'src/posts/entities/post.entity';
 import { PostLike } from 'src/posts/entities/post-like.entity';
+import { PostFavorite } from 'src/posts/entities/post-favorite.entity';
 import { Follower } from 'src/follower/entities/follower.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
 
@@ -66,6 +67,10 @@ export class User {
   @OneToMany(() => PostLike, (likes) => likes.user)
   @ApiProperty({ type: () => [PostLike], required: false })
   likes: PostLike[];
+
+  @OneToMany(() => PostFavorite, (favorites) => favorites.user)
+  @ApiProperty({ type: () => [PostFavorite], required: false })
+  favorites: PostFavorite[];
 
   @OneToMany(() => Comment, (comment) => comment.user)
   @ApiProperty({ type: () => [Comment], required: false })

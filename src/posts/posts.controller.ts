@@ -30,6 +30,7 @@ import { SuccessMessageDto } from 'src/common/dto/success-message.dto';
 import { CreatePostDto, CreatePostMultipartDto } from './dto/create-post.dto';
 import { PostResponseDto, PostsListDto } from './dto/post-response.dto';
 import { UpdatePostDto, UpdatePostMultipartDto } from './dto/update-post.dto';
+import { ViewPostResponseDto } from './dto/view-post.dto';
 import { PostsService } from './posts.service';
 
 @ApiTags('Posts')
@@ -97,6 +98,19 @@ export class PostsController {
     @User('userId') currentUserId?: number,
   ) {
     return this.postsService.findPostsByAuthorId(authorId, currentUserId);
+  }
+
+  @Get('favorites')
+  @ApiOperation({ summary: 'Получить избранные посты текущего пользователя' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
+  @ApiResponse({
+    status: 200,
+    description: 'Favorite posts retrieved successfully',
+    type: PostsListDto,
+  })
+  findMyFavoritePosts(@User('userId') userId: number) {
+    return this.postsService.findFavoritePosts(userId);
   }
 
   @Get(':id')
@@ -195,5 +209,40 @@ export class PostsController {
     @Param('id', ParseIntPipe) postId: number,
   ) {
     return this.postsService.toggleLike(userId, postId);
+  }
+
+  @Post(':id/favorite')
+  @ApiOperation({ summary: 'Toggle favorite on post (add/remove from favorites)' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
+  @ApiParam({ name: 'id', example: 1, description: 'Post identifier' })
+  @ApiResponse({
+    status: 200,
+    description: 'Favorite toggled successfully',
+    schema: {
+      example: {
+        favorited: true,
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Post not found' })
+  toggleFavorite(
+    @User('userId') userId: number,
+    @Param('id', ParseIntPipe) postId: number,
+  ) {
+    return this.postsService.toggleFavorite(userId, postId);
+  }
+
+  @Post(':id/view')
+  @ApiOperation({ summary: 'Count post view' })
+  @ApiParam({ name: 'id', example: 1, description: 'Post identifier' })
+  @ApiResponse({
+    status: 200,
+    description: 'View counted successfully',
+    type: ViewPostResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Post not found' })
+  addView(@Param('id', ParseIntPipe) postId: number) {
+    return this.postsService.addView(postId);
   }
 }

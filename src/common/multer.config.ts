@@ -1,6 +1,7 @@
 import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { UPLOADS_DIR } from './uploads-path';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -12,11 +13,11 @@ export const multerConfig = {
       let folder: string;
 
       if (file.fieldname === 'avatar') {
-        folder = './uploads/avatar';
+        folder = join(UPLOADS_DIR, 'avatar');
       } else if (file.fieldname === 'background') {
-        folder = './uploads/background';
+        folder = join(UPLOADS_DIR, 'background');
       } else {
-        folder = './uploads/other';
+        folder = join(UPLOADS_DIR, 'other');
       }
 
       if (!existsSync(folder)) {

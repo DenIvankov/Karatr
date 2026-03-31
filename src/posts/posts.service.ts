@@ -16,6 +16,8 @@ import { PostLike } from './entities/post-like.entity';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { PostMedia, PostMediaType } from './entities/post-media.entity';
+import { PostFavorite } from './entities/post-favorite.entity';
+import { POSTS_UPLOADS_DIR, UPLOADS_DIR } from 'src/common/uploads-path';
 
 const MAX_MEDIA_PER_POST = 4;
 
@@ -77,6 +79,8 @@ export class PostsService {
     private readonly postRepository: Repository<Post>,
     @InjectRepository(PostLike)
     private readonly postLikesRepository: Repository<PostLike>,
+    @InjectRepository(PostFavorite)
+    private readonly postFavoritesRepository: Repository<PostFavorite>,
     @InjectRepository(PostMedia)
     private readonly postMediaRepository: Repository<PostMedia>,
   ) {}
@@ -150,7 +154,7 @@ export class PostsService {
       .addOrderBy('media.order', 'ASC')
       .getMany();
 
-    return this.attachCurrentUserLiked(posts, currentUserId);
+    return this.attachCurrentUserReactions(posts, currentUserId);
   }
 
   async findPostById(postId: number, currentUserId?: number) {
@@ -177,7 +181,7 @@ export class PostsService {
       throw new NotFoundException(`Post with id ${postId} not found`);
     }
 
-    await this.attachCurrentUserLiked([post], currentUserId);
+    await this.attachCurrentUserReactions([post], currentUserId);
     return post;
   }
 
@@ -198,7 +202,22 @@ export class PostsService {
       .addOrderBy('media.order', 'ASC')
       .getMany();
 
-    return this.attachCurrentUserLiked(posts, currentUserId);
+    return this.attachCurrentUserReactions(posts, currentUserId);
+  }
+
+  async findFavoritePosts(userId: number) {
+    const posts = await this.postRepository
+      .createQueryBuilder('post')
+      .innerJoin('post_favorites', 'pf', 'pf.post_id = post.id')
+      .leftJoinAndSelect('post.user', 'user')
+      .leftJoinAndSelect('user.profile', 'profile')
+      .leftJoinAndSelect('post.media', 'media')
+      .where('pf.user_id = :userId', { userId })
+      .orderBy('pf.created_at', 'DESC')
+      .addOrderBy('media.order', 'ASC')
+      .getMany();
+
+    return this.attachCurrentUserReactions(posts, userId);
   }
 
   async updatePost(
@@ -324,6 +343,8 @@ export class PostsService {
   }
 
   async toggleLike(userId: number, postId: number) {
+    await this.ensurePostExists(postId);
+
     const existingLike = await this.postLikesRepository.findOne({
       where: { post: { id: postId }, user: { id: userId } },
     });
@@ -342,6 +363,50 @@ export class PostsService {
     }
   }
 
+  async toggleFavorite(userId: number, postId: number) {
+    await this.ensurePostExists(postId);
+
+    const existingFavorite = await this.postFavoritesRepository.findOne({
+      where: { post: { id: postId }, user: { id: userId } },
+    });
+
+    if (existingFavorite) {
+      await this.postFavoritesRepository.delete(existingFavorite.id);
+      return { favorited: false };
+    }
+
+    await this.postFavoritesRepository.save({
+      post: { id: postId },
+      user: { id: userId },
+    });
+
+    return { favorited: true };
+  }
+
+  async addView(postId: number) {
+    const post = await this.postRepository.findOne({
+      where: { id: postId },
+      select: ['id', 'viewsCount'],
+    });
+
+    if (!post) {
+      throw new NotFoundException(`Post with id ${postId} not found`);
+    }
+
+    await this.postRepository.increment({ id: postId }, 'viewsCount', 1);
+
+    const updatedPost = await this.postRepository.findOne({
+      where: { id: postId },
+      select: ['id', 'viewsCount'],
+    });
+
+    return {
+      postId,
+      viewsCount: updatedPost?.viewsCount ?? post.viewsCount + 1,
+      message: 'View counted successfully',
+    };
+  }
+
   private async getLikesCount(postId: number): Promise<number> {
     const post = await this.postRepository.findOne({
       where: { id: postId },
@@ -350,7 +415,21 @@ export class PostsService {
     return post?.likesCount ?? 0;
   }
 
-  private async attachCurrentUserLiked(posts: Post[], currentUserId?: number) {
+  private async ensurePostExists(postId: number) {
+    const post = await this.postRepository.findOne({
+      where: { id: postId },
+      select: ['id'],
+    });
+
+    if (!post) {
+      throw new NotFoundException(`Post with id ${postId} not found`);
+    }
+  }
+
+  private async attachCurrentUserReactions(
+    posts: Post[],
+    currentUserId?: number,
+  ) {
     if (!posts.length) {
       return posts;
     }
@@ -358,6 +437,7 @@ export class PostsService {
     if (!currentUserId) {
       for (const post of posts) {
         post.currentUserLiked = false;
+        post.currentUserFavorited = false;
       }
 
       return posts;
@@ -379,6 +459,21 @@ export class PostsService {
       [currentUserId, postIds],
     );
 
+    const favoritedRows = await this.postRepository.query(
+      `
+      SELECT p.id AS "postId",
+             EXISTS(
+               SELECT 1
+               FROM post_favorites pf
+               WHERE pf.post_id = p.id
+                 AND pf.user_id = $1
+             ) AS "currentUserFavorited"
+      FROM posts p
+      WHERE p.id = ANY($2::int[])
+      `,
+      [currentUserId, postIds],
+    );
+
     const likedMap = new Map<number, boolean>(
       likedRows.map(
         (row: { postId: number; currentUserLiked: boolean | string }) => [
@@ -388,8 +483,19 @@ export class PostsService {
       ),
     );
 
+    const favoritedMap = new Map<number, boolean>(
+      favoritedRows.map(
+        (row: { postId: number; currentUserFavorited: boolean | string }) => [
+          Number(row.postId),
+          row.currentUserFavorited === true ||
+            row.currentUserFavorited === 't',
+        ],
+      ),
+    );
+
     for (const post of posts) {
       post.currentUserLiked = likedMap.get(post.id) ?? false;
+      post.currentUserFavorited = favoritedMap.get(post.id) ?? false;
     }
 
     return posts;
@@ -482,7 +588,7 @@ export class PostsService {
   }
 
   private getPostFolderPath(postId: number) {
-    return resolve(process.cwd(), 'uploads', 'posts', String(postId));
+    return resolve(POSTS_UPLOADS_DIR, String(postId));
   }
 
   private resolveUploadPath(relativeUrl: string) {
@@ -490,8 +596,8 @@ export class PostsService {
       ? relativeUrl.slice(1)
       : relativeUrl;
 
-    const uploadsRoot = resolve(process.cwd(), 'uploads');
-    const resolvedPath = resolve(process.cwd(), normalized);
+    const uploadsRoot = UPLOADS_DIR;
+    const resolvedPath = resolve(uploadsRoot, normalized.replace(/^uploads[\\/]/, ''));
 
     if (
       resolvedPath !== uploadsRoot &&
@@ -526,7 +632,7 @@ export class PostsService {
   }
 
   private async removePostMediaFolderIfEmpty() {
-    const rootFolder = resolve(process.cwd(), 'uploads', 'posts');
+    const rootFolder = POSTS_UPLOADS_DIR;
 
     if (!existsSync(rootFolder)) {
       return;

@@ -14,4 +14,4 @@ RUN mkdir -p uploads/avatar uploads/background
 
 EXPOSE 3000
 
-CMD ["node", "dist/main"]
+CMD ["node", "scripts/start-prod.js"]

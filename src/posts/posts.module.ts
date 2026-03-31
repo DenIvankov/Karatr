@@ -4,11 +4,14 @@ import { User } from 'src/users/entities/user.entity';
 import { Post } from './entities/post.entity';
 import { PostLike } from './entities/post-like.entity';
 import { PostMedia } from './entities/post-media.entity';
+import { PostFavorite } from './entities/post-favorite.entity';
 import { PostsController } from './posts.controller';
 import { PostsService } from './posts.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Post, PostLike, PostMedia])],
+  imports: [
+    TypeOrmModule.forFeature([User, Post, PostLike, PostFavorite, PostMedia]),
+  ],
   controllers: [PostsController],
   providers: [PostsService],
   exports: [PostsService],
