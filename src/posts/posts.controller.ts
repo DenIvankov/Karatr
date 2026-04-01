@@ -84,6 +84,19 @@ export class PostsController {
     return this.postsService.findAllPosts(currentUserId);
   }
 
+  @Get('following')
+  @ApiOperation({ summary: 'Get feed from followed users' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
+  @ApiResponse({
+    status: 200,
+    description: 'Following feed retrieved successfully',
+    type: PostsListDto,
+  })
+  findFollowingFeed(@User('userId') userId: number) {
+    return this.postsService.findFollowingFeed(userId);
+  }
+
   @Get('author/:authorId')
   @ApiOperation({ summary: 'Получить посты по ID автора' })
   @UseGuards(OptionalJwtGuard)
@@ -98,6 +111,38 @@ export class PostsController {
     @User('userId') currentUserId?: number,
   ) {
     return this.postsService.findPostsByAuthorId(authorId, currentUserId);
+  }
+
+  @Get('liked-by/:userId')
+  @ApiOperation({ summary: 'Get posts liked by user id' })
+  @UseGuards(OptionalJwtGuard)
+  @ApiParam({ name: 'userId', example: 1, description: 'User identifier' })
+  @ApiResponse({
+    status: 200,
+    description: 'Liked posts retrieved successfully',
+    type: PostsListDto,
+  })
+  findPostsLikedByUser(
+    @Param('userId', ParseIntPipe) userId: number,
+    @User('userId') currentUserId?: number,
+  ) {
+    return this.postsService.findPostsLikedByUser(userId, currentUserId);
+  }
+
+  @Get('commented-by/:userId')
+  @ApiOperation({ summary: 'Get posts commented by user id' })
+  @UseGuards(OptionalJwtGuard)
+  @ApiParam({ name: 'userId', example: 1, description: 'User identifier' })
+  @ApiResponse({
+    status: 200,
+    description: 'Commented posts retrieved successfully',
+    type: PostsListDto,
+  })
+  findPostsCommentedByUser(
+    @Param('userId', ParseIntPipe) userId: number,
+    @User('userId') currentUserId?: number,
+  ) {
+    return this.postsService.findPostsCommentedByUser(userId, currentUserId);
   }
 
   @Get('favorites')
@@ -231,6 +276,25 @@ export class PostsController {
     @Param('id', ParseIntPipe) postId: number,
   ) {
     return this.postsService.toggleFavorite(userId, postId);
+  }
+
+  @Post(':id/repost')
+  @ApiOperation({ summary: 'Repost post by id' })
+  @ApiBearerAuth()
+  @UseGuards(JwtGuard)
+  @ApiParam({ name: 'id', example: 1, description: 'Post identifier' })
+  @ApiResponse({
+    status: 201,
+    description: 'Post reposted successfully',
+    type: PostResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Already reposted' })
+  @ApiResponse({ status: 404, description: 'Post not found' })
+  repostPost(
+    @User('userId') userId: number,
+    @Param('id', ParseIntPipe) postId: number,
+  ) {
+    return this.postsService.repostPost(userId, postId);
   }
 
   @Post(':id/view')

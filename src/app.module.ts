@@ -6,6 +6,9 @@ import { UsersModule } from './users/users.module';
 import { FollowerModule } from './follower/follower.module';
 import { PostsModule } from './posts/posts.module';
 import { CommentsModule } from './comments/comments.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { SimulationModule } from './simulation/simulation.module';
+import { HashtagsModule } from './hashtags/hashtags.module';
 
 @Module({
   imports: [
@@ -26,7 +29,10 @@ import { CommentsModule } from './comments/comments.module';
     }),
     FollowerModule,
     PostsModule,
+    HashtagsModule,
     CommentsModule,
+    NotificationsModule,
+    SimulationModule,
   ],
 })
 export class AppModule {}

@@ -9,7 +9,7 @@ import { mkdir, rm, unlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { extname, join, resolve, sep } from 'path';
 import { randomUUID } from 'crypto';
-import { Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { Post } from './entities/post.entity';
 import { PostLike } from './entities/post-like.entity';
@@ -18,6 +18,11 @@ import { UpdatePostDto } from './dto/update-post.dto';
 import { PostMedia, PostMediaType } from './entities/post-media.entity';
 import { PostFavorite } from './entities/post-favorite.entity';
 import { POSTS_UPLOADS_DIR, UPLOADS_DIR } from 'src/common/uploads-path';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { NotificationType } from 'src/notifications/entities/notification.entity';
+import { HashtagsService } from 'src/hashtags/hashtags.service';
+import { Hashtag } from 'src/hashtags/entities/hashtag.entity';
+import { PostHashtag } from 'src/hashtags/entities/post-hashtag.entity';
 
 const MAX_MEDIA_PER_POST = 4;
 
@@ -35,7 +40,7 @@ const MEDIA_RULES: Record<
   'image/jpeg': {
     type: PostMediaType.IMAGE,
     maxSize: IMAGE_MAX_SIZE,
-    allowedExtensions: ['.jpg', '.jpeg'],
+    allowedExtensions: ['.jpg', '.jpeg', '.jfif'],
   },
   'image/png': {
     type: PostMediaType.IMAGE,
@@ -83,6 +88,8 @@ export class PostsService {
     private readonly postFavoritesRepository: Repository<PostFavorite>,
     @InjectRepository(PostMedia)
     private readonly postMediaRepository: Repository<PostMedia>,
+    private readonly notificationsService: NotificationsService,
+    private readonly hashtagsService: HashtagsService,
   ) {}
 
   async createPost(
@@ -108,12 +115,24 @@ export class PostsService {
           const postRepository = manager.getRepository(Post);
           const postMediaRepository = manager.getRepository(PostMedia);
 
+          const normalizedContent = this.normalizePostText(postData.content);
+          const safeContent =
+            normalizedContent.length > 0 || validatedFiles.length > 0
+              ? normalizedContent || ' '
+              : ' ';
+
           const post = postRepository.create({
-            ...postData,
+            title: this.resolvePostTitle(postData.title, safeContent),
+            content: safeContent,
             user,
           });
 
           const savedPost = await postRepository.save(post);
+          await this.syncPostHashtags(
+            manager,
+            savedPost.id,
+            savedPost.content,
+          );
 
           if (validatedFiles.length) {
             const mediaRows = await this.saveMediaFilesToDisk(
@@ -144,6 +163,10 @@ export class PostsService {
       .leftJoinAndSelect('post.user', 'user')
       .leftJoinAndSelect('user.profile', 'profile')
       .leftJoinAndSelect('post.media', 'media')
+      .leftJoinAndSelect('post.originalPost', 'originalPost')
+      .leftJoinAndSelect('originalPost.user', 'originalUser')
+      .leftJoinAndSelect('originalUser.profile', 'originalUserProfile')
+      .leftJoinAndSelect('originalPost.media', 'originalMedia')
       .addSelect((subQuery) => {
         return subQuery
           .select('COUNT(*)', 'likes_count')
@@ -152,9 +175,50 @@ export class PostsService {
       }, 'likesCount')
       .orderBy('post.id', 'DESC')
       .addOrderBy('media.order', 'ASC')
+      .addOrderBy('originalMedia.order', 'ASC')
       .getMany();
 
     return this.attachCurrentUserReactions(posts, currentUserId);
+  }
+
+  async findFollowingFeed(userId: number) {
+    const followingRows = await this.postRepository.query(
+      `
+      SELECT "followingId" AS "followingId"
+      FROM follower
+      WHERE "followerId" = $1
+      `,
+      [userId],
+    );
+
+    const authorIds = [
+      userId,
+      ...followingRows
+        .map((row: { followingId: number | string }) => Number(row.followingId))
+        .filter((id: number) => Number.isFinite(id)),
+    ];
+
+    const uniqueAuthorIds = [...new Set(authorIds)];
+    if (!uniqueAuthorIds.length) {
+      return [];
+    }
+
+    const posts = await this.postRepository
+      .createQueryBuilder('post')
+      .leftJoinAndSelect('post.user', 'user')
+      .leftJoinAndSelect('user.profile', 'profile')
+      .leftJoinAndSelect('post.media', 'media')
+      .leftJoinAndSelect('post.originalPost', 'originalPost')
+      .leftJoinAndSelect('originalPost.user', 'originalUser')
+      .leftJoinAndSelect('originalUser.profile', 'originalUserProfile')
+      .leftJoinAndSelect('originalPost.media', 'originalMedia')
+      .where('user.id IN (:...authorIds)', { authorIds: uniqueAuthorIds })
+      .orderBy('post.id', 'DESC')
+      .addOrderBy('media.order', 'ASC')
+      .addOrderBy('originalMedia.order', 'ASC')
+      .getMany();
+
+    return this.attachCurrentUserReactions(posts, userId);
   }
 
   async findPostById(postId: number, currentUserId?: number) {
@@ -162,6 +226,10 @@ export class PostsService {
       .createQueryBuilder('post')
       .leftJoinAndSelect('post.user', 'user')
       .leftJoinAndSelect('user.profile', 'profile')
+      .leftJoinAndSelect('post.originalPost', 'originalPost')
+      .leftJoinAndSelect('originalPost.user', 'originalUser')
+      .leftJoinAndSelect('originalUser.profile', 'originalUserProfile')
+      .leftJoinAndSelect('originalPost.media', 'originalMedia')
       .leftJoinAndSelect('post.comments', 'comments')
       .leftJoinAndSelect('comments.user', 'commentUser')
       .leftJoinAndSelect('commentUser.profile', 'commentUserProfile')
@@ -175,6 +243,7 @@ export class PostsService {
       .where('post.id = :postId', { postId })
       .orderBy('comments.createdAt', 'DESC')
       .addOrderBy('media.order', 'ASC')
+      .addOrderBy('originalMedia.order', 'ASC')
       .getOne();
 
     if (!post) {
@@ -191,6 +260,10 @@ export class PostsService {
       .leftJoinAndSelect('post.user', 'user')
       .leftJoinAndSelect('user.profile', 'profile')
       .leftJoinAndSelect('post.media', 'media')
+      .leftJoinAndSelect('post.originalPost', 'originalPost')
+      .leftJoinAndSelect('originalPost.user', 'originalUser')
+      .leftJoinAndSelect('originalUser.profile', 'originalUserProfile')
+      .leftJoinAndSelect('originalPost.media', 'originalMedia')
       .addSelect((subQuery) => {
         return subQuery
           .select('COUNT(*)', 'likes_count')
@@ -200,9 +273,74 @@ export class PostsService {
       .where('user.id = :authorId', { authorId })
       .orderBy('post.id', 'DESC')
       .addOrderBy('media.order', 'ASC')
+      .addOrderBy('originalMedia.order', 'ASC')
       .getMany();
 
     return this.attachCurrentUserReactions(posts, currentUserId);
+  }
+
+  async findPostsLikedByUser(userId: number, currentUserId?: number) {
+    const posts = await this.postRepository
+      .createQueryBuilder('post')
+      .innerJoin('post_likes', 'pl', 'pl.post_id = post.id')
+      .leftJoinAndSelect('post.user', 'user')
+      .leftJoinAndSelect('user.profile', 'profile')
+      .leftJoinAndSelect('post.media', 'media')
+      .leftJoinAndSelect('post.originalPost', 'originalPost')
+      .leftJoinAndSelect('originalPost.user', 'originalUser')
+      .leftJoinAndSelect('originalUser.profile', 'originalUserProfile')
+      .leftJoinAndSelect('originalPost.media', 'originalMedia')
+      .where('pl.user_id = :userId', { userId })
+      .orderBy('pl.created_at', 'DESC')
+      .addOrderBy('media.order', 'ASC')
+      .addOrderBy('originalMedia.order', 'ASC')
+      .getMany();
+
+    return this.attachCurrentUserReactions(posts, currentUserId);
+  }
+
+  async findPostsCommentedByUser(userId: number, currentUserId?: number) {
+    const rows = await this.postRepository.query(
+      `
+      SELECT c.post_id AS "postId",
+             MAX(c.created_at) AS "lastCommentAt"
+      FROM comment c
+      WHERE c.user_id = $1
+      GROUP BY c.post_id
+      ORDER BY MAX(c.created_at) DESC
+      LIMIT 300
+      `,
+      [userId],
+    );
+
+    const postIds = rows
+      .map((row: { postId: number | string }) => Number(row.postId))
+      .filter((id: number) => Number.isFinite(id));
+
+    if (!postIds.length) {
+      return [];
+    }
+
+    const posts = await this.postRepository
+      .createQueryBuilder('post')
+      .leftJoinAndSelect('post.user', 'user')
+      .leftJoinAndSelect('user.profile', 'profile')
+      .leftJoinAndSelect('post.media', 'media')
+      .leftJoinAndSelect('post.originalPost', 'originalPost')
+      .leftJoinAndSelect('originalPost.user', 'originalUser')
+      .leftJoinAndSelect('originalUser.profile', 'originalUserProfile')
+      .leftJoinAndSelect('originalPost.media', 'originalMedia')
+      .where('post.id IN (:...postIds)', { postIds })
+      .addOrderBy('media.order', 'ASC')
+      .addOrderBy('originalMedia.order', 'ASC')
+      .getMany();
+
+    const byId = new Map(posts.map((post) => [post.id, post]));
+    const ordered = postIds
+      .map((id) => byId.get(id))
+      .filter((post): post is Post => Boolean(post));
+
+    return this.attachCurrentUserReactions(ordered, currentUserId);
   }
 
   async findFavoritePosts(userId: number) {
@@ -212,9 +350,14 @@ export class PostsService {
       .leftJoinAndSelect('post.user', 'user')
       .leftJoinAndSelect('user.profile', 'profile')
       .leftJoinAndSelect('post.media', 'media')
+      .leftJoinAndSelect('post.originalPost', 'originalPost')
+      .leftJoinAndSelect('originalPost.user', 'originalUser')
+      .leftJoinAndSelect('originalUser.profile', 'originalUserProfile')
+      .leftJoinAndSelect('originalPost.media', 'originalMedia')
       .where('pf.user_id = :userId', { userId })
       .orderBy('pf.created_at', 'DESC')
       .addOrderBy('media.order', 'ASC')
+      .addOrderBy('originalMedia.order', 'ASC')
       .getMany();
 
     return this.attachCurrentUserReactions(posts, userId);
@@ -274,14 +417,15 @@ export class PostsService {
         const postMediaRepository = manager.getRepository(PostMedia);
 
         if (typeof updatePostDto.title === 'string') {
-          post.title = updatePostDto.title;
+          post.title = this.normalizePostText(updatePostDto.title) || post.title;
         }
 
         if (typeof updatePostDto.content === 'string') {
-          post.content = updatePostDto.content;
+          post.content = this.normalizePostText(updatePostDto.content) || ' ';
         }
 
         await postRepository.save(post);
+        await this.syncPostHashtags(manager, post.id, post.content);
 
         if (removeMediaIds.length) {
           await postMediaRepository.delete(removeMediaIds);
@@ -322,7 +466,7 @@ export class PostsService {
   async deletePost(postId: number, userId: number) {
     const post = await this.postRepository.findOne({
       where: { id: postId },
-      relations: { user: true, media: true },
+      relations: { user: true, media: true, originalPost: true },
     });
 
     if (!post) {
@@ -335,9 +479,40 @@ export class PostsService {
 
     const mediaUrls = post.media.map((item) => item.url);
 
+    const dependentReposts = await this.postRepository.find({
+      where: {
+        originalPost: { id: postId },
+      },
+      relations: { media: true },
+    });
+    const dependentRepostIds = dependentReposts.map((item) => item.id);
+    const dependentRepostMediaUrls = dependentReposts
+      .flatMap((item) => item.media ?? [])
+      .map((item) => item.url);
+
+    if (dependentRepostIds.length) {
+      await this.postRepository.delete(dependentRepostIds);
+    }
+
     await this.postRepository.delete(postId);
+
+    if (post.originalPost?.id) {
+      await this.postRepository
+        .createQueryBuilder()
+        .update(Post)
+        .set({
+          repostsCount: () => 'GREATEST(reposts_count - 1, 0)',
+        })
+        .where('id = :originalPostId', { originalPostId: post.originalPost.id })
+        .execute();
+    }
+
     await this.deleteFilesByUrls(mediaUrls);
     await this.deletePostMediaFolder(postId);
+    await this.deleteFilesByUrls(dependentRepostMediaUrls);
+    for (const repostId of dependentRepostIds) {
+      await this.deletePostMediaFolder(repostId);
+    }
 
     return { message: `Post with id ${postId} deleted` };
   }
@@ -345,9 +520,13 @@ export class PostsService {
   async toggleLike(userId: number, postId: number) {
     await this.ensurePostExists(postId);
 
-    const existingLike = await this.postLikesRepository.findOne({
-      where: { post: { id: postId }, user: { id: userId } },
-    });
+    const existingLike = await this.postLikesRepository
+      .createQueryBuilder('pl')
+      .select('pl.id', 'id')
+      .where('pl.post_id = :postId', { postId })
+      .andWhere('pl.user_id = :userId', { userId })
+      .limit(1)
+      .getRawOne<{ id: number }>();
 
     if (existingLike) {
       await this.postLikesRepository.delete(existingLike.id);
@@ -359,6 +538,25 @@ export class PostsService {
         user: { id: userId },
       });
       await this.postRepository.increment({ id: postId }, 'likesCount', 1);
+
+      const post = await this.postRepository.findOne({
+        where: { id: postId },
+        relations: { user: true, originalPost: { user: true } },
+      });
+
+      const notificationTargetUserId =
+        post?.originalPost?.user?.id ?? post?.user?.id;
+      const notificationPostId = post?.originalPost?.id ?? post?.id;
+
+      if (notificationTargetUserId && notificationPostId) {
+        await this.notificationsService.createNotification({
+          userId: notificationTargetUserId,
+          fromUserId: userId,
+          postId: notificationPostId,
+          type: NotificationType.LIKE,
+        });
+      }
+
       return { liked: true, likesCount: await this.getLikesCount(postId) };
     }
   }
@@ -366,9 +564,13 @@ export class PostsService {
   async toggleFavorite(userId: number, postId: number) {
     await this.ensurePostExists(postId);
 
-    const existingFavorite = await this.postFavoritesRepository.findOne({
-      where: { post: { id: postId }, user: { id: userId } },
-    });
+    const existingFavorite = await this.postFavoritesRepository
+      .createQueryBuilder('pf')
+      .select('pf.id', 'id')
+      .where('pf.post_id = :postId', { postId })
+      .andWhere('pf.user_id = :userId', { userId })
+      .limit(1)
+      .getRawOne<{ id: number }>();
 
     if (existingFavorite) {
       await this.postFavoritesRepository.delete(existingFavorite.id);
@@ -381,6 +583,102 @@ export class PostsService {
     });
 
     return { favorited: true };
+  }
+
+  async repostPost(userId: number, postId: number) {
+    const sourcePost = await this.postRepository.findOne({
+      where: { id: postId },
+      relations: { user: true, originalPost: { user: true } },
+    });
+
+    if (!sourcePost) {
+      throw new NotFoundException(`Post with id ${postId} not found`);
+    }
+
+    const originalPostId = sourcePost.originalPost?.id ?? sourcePost.id;
+    const originalPostAuthorId =
+      sourcePost.originalPost?.user?.id ?? sourcePost.user?.id;
+
+    if (originalPostAuthorId && originalPostAuthorId === userId) {
+      throw new BadRequestException('You cannot repost your own post');
+    }
+
+    const existingRepost = await this.postRepository
+      .createQueryBuilder('post')
+      .leftJoin('post.user', 'user')
+      .select('post.id', 'id')
+      .addSelect('post.original_post_id', 'originalPostId')
+      .where('user.id = :userId', { userId })
+      .andWhere('post.original_post_id = :originalPostId', { originalPostId })
+      .limit(1)
+      .getRawOne<{ id: number; originalPostId: number }>();
+
+    if (existingRepost) {
+      await this.postRepository.delete(existingRepost.id);
+      await this.postRepository
+        .createQueryBuilder()
+        .update(Post)
+        .set({
+          repostsCount: () => 'GREATEST(reposts_count - 1, 0)',
+        })
+        .where('id = :originalPostId', {
+          originalPostId: Number(existingRepost.originalPostId),
+        })
+        .execute();
+
+      return {
+        reposted: false,
+        originalPostId,
+        message: 'Repost removed',
+      };
+    }
+
+    const savedRepost = await this.postRepository.manager.transaction(
+      async (manager) => {
+        const postRepository = manager.getRepository(Post);
+        const repost = postRepository.create({
+          title: sourcePost.title,
+          content: sourcePost.content,
+          user: { id: userId } as User,
+          originalPost: { id: originalPostId } as Post,
+        });
+
+        const createdRepost = await postRepository.save(repost);
+        await this.syncPostHashtags(
+          manager,
+          createdRepost.id,
+          createdRepost.content,
+        );
+        await postRepository.increment(
+          { id: originalPostId },
+          'repostsCount',
+          1,
+        );
+
+        return createdRepost;
+      },
+    );
+
+    const originalPostWithAuthor = await this.postRepository.findOne({
+      where: { id: originalPostId },
+      relations: { user: true },
+    });
+
+    if (originalPostWithAuthor?.user?.id) {
+      await this.notificationsService.createNotification({
+        userId: originalPostWithAuthor.user.id,
+        fromUserId: userId,
+        postId: originalPostId,
+        type: NotificationType.REPOST,
+      });
+    }
+
+    return {
+      reposted: true,
+      originalPostId,
+      post: await this.findPostById(savedRepost.id, userId),
+      message: 'Post reposted successfully',
+    };
   }
 
   async addView(postId: number) {
@@ -405,6 +703,87 @@ export class PostsService {
       viewsCount: updatedPost?.viewsCount ?? post.viewsCount + 1,
       message: 'View counted successfully',
     };
+  }
+
+  private resolvePostTitle(rawTitle: string | undefined, content: string) {
+    const normalizedTitle = this.normalizePostText(rawTitle);
+    if (normalizedTitle.length > 0) {
+      return normalizedTitle.slice(0, 120);
+    }
+
+    const normalizedContent = String(content ?? '').trim();
+    if (!normalizedContent) {
+      return 'Post';
+    }
+
+    return normalizedContent.length > 60
+      ? `${normalizedContent.slice(0, 57)}...`
+      : normalizedContent;
+  }
+
+  private normalizePostText(value: string | undefined | null) {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+      return '';
+    }
+
+    const lowered = normalized.toLowerCase();
+    if (lowered === 'undefined' || lowered === 'null') {
+      return '';
+    }
+
+    return normalized;
+  }
+
+  private async syncPostHashtags(
+    manager: EntityManager,
+    postId: number,
+    content: string,
+  ) {
+    const hashtagNames = this.hashtagsService.extractHashtags(content);
+    const hashtagRepository = manager.getRepository(Hashtag);
+    const postHashtagRepository = manager.getRepository(PostHashtag);
+
+    await postHashtagRepository
+      .createQueryBuilder()
+      .delete()
+      .from(PostHashtag)
+      .where('post_id = :postId', { postId })
+      .execute();
+
+    if (!hashtagNames.length) {
+      return;
+    }
+
+    await hashtagRepository
+      .createQueryBuilder()
+      .insert()
+      .into(Hashtag)
+      .values(hashtagNames.map((name) => ({ name })))
+      .orIgnore()
+      .execute();
+
+    const hashtags = await hashtagRepository.find({
+      where: { name: In(hashtagNames) },
+      select: ['id', 'name'],
+    });
+
+    if (!hashtags.length) {
+      return;
+    }
+
+    await postHashtagRepository
+      .createQueryBuilder()
+      .insert()
+      .into(PostHashtag)
+      .values(
+        hashtags.map((hashtag) => ({
+          post: { id: postId },
+          hashtag: { id: hashtag.id },
+        })),
+      )
+      .orIgnore()
+      .execute();
   }
 
   private async getLikesCount(postId: number): Promise<number> {
@@ -514,7 +893,7 @@ export class PostsService {
 
       if (!rule || !rule.allowedExtensions.includes(ext)) {
         throw new BadRequestException(
-          `Unsupported media file: ${file.originalname}. Allowed types: jpg/jpeg/png/webp/mp4/webm/mov`,
+          `Unsupported media file: ${file.originalname}. Allowed types: jpg/jpeg/jfif/png/webp/mp4/webm/mov`,
         );
       }
 

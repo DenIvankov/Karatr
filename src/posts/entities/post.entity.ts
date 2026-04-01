@@ -13,6 +13,7 @@ import { Comment } from 'src/comments/entities/comment.entity';
 import { PostLike } from './post-like.entity';
 import { PostMedia } from './post-media.entity';
 import { PostFavorite } from './post-favorite.entity';
+import { PostHashtag } from 'src/hashtags/entities/post-hashtag.entity';
 
 @Entity('posts')
 export class Post {
@@ -28,6 +29,15 @@ export class Post {
   @ApiProperty({ example: 'Текст поста', description: 'Post content' })
   content: string;
 
+  @Column({ name: 'original_post_id', type: 'int', nullable: true })
+  @ApiProperty({
+    example: 42,
+    description: 'Original post ID for reposts',
+    required: false,
+    nullable: true,
+  })
+  originalPostId?: number | null;
+
   @Column({ name: 'comments_count', type: 'int', default: 0 })
   @ApiProperty({ example: 5, description: 'Comments count' })
   commentsCount: number;
@@ -39,6 +49,10 @@ export class Post {
   @Column({ name: 'views_count', type: 'int', default: 0 })
   @ApiProperty({ example: 145, description: 'Views count' })
   viewsCount: number;
+
+  @Column({ name: 'reposts_count', type: 'int', default: 0 })
+  @ApiProperty({ example: 3, description: 'Reposts count' })
+  repostsCount: number;
 
   @ApiProperty({
     example: true,
@@ -78,4 +92,20 @@ export class Post {
   @OneToMany(() => PostMedia, (media) => media.post)
   @ApiProperty({ type: () => [PostMedia], required: false })
   media: PostMedia[];
+
+  @OneToMany(() => PostHashtag, (postHashtag) => postHashtag.post)
+  @ApiProperty({ type: () => [PostHashtag], required: false })
+  postHashtags?: PostHashtag[];
+
+  @ManyToOne(() => Post, (post) => post.reposts, {
+    nullable: true,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'original_post_id' })
+  @ApiProperty({ type: () => Post, required: false, nullable: true })
+  originalPost?: Post | null;
+
+  @OneToMany(() => Post, (post) => post.originalPost)
+  @ApiProperty({ type: () => [Post], required: false })
+  reposts?: Post[];
 }

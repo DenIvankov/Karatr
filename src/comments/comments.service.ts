@@ -10,6 +10,8 @@ import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
 import { Comment } from './entities/comment.entity';
 import { Post } from 'src/posts/entities/post.entity';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { NotificationType } from 'src/notifications/entities/notification.entity';
 
 @Injectable()
 export class CommentsService {
@@ -20,6 +22,7 @@ export class CommentsService {
     private readonly postRepository: Repository<Post>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createComment(userId: number, postId: number, commentData: CreateCommentDto) {
@@ -60,6 +63,17 @@ export class CommentsService {
 
     const fullComment = await this.findCommentById(savedCommentId);
 
+    const postAuthorId = fullComment.post?.user?.id;
+    const targetPostId = fullComment.post?.id;
+    if (postAuthorId && targetPostId) {
+      await this.notificationsService.createNotification({
+        userId: postAuthorId,
+        fromUserId: userId,
+        postId: targetPostId,
+        type: NotificationType.COMMENT,
+      });
+    }
+
     return {
       comment: fullComment,
       message: 'Comment created successfully',
@@ -70,7 +84,9 @@ export class CommentsService {
     const comment = await this.commentRepository.findOne({
       where: { id: commentId },
       relations: {
-        post: true,
+        post: {
+          user: true,
+        },
         user: {
           profile: true,
         },
